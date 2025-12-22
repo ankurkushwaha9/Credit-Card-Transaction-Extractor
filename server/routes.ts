@@ -210,6 +210,21 @@ function extractDualDates(line: string): { postDate: string; transDate: string; 
   return null;
 }
 
+// Check if line starts with single date (for pending/future transactions)
+function extractSingleDate(line: string): { date: string; remaining: string } | null {
+  // Pattern for single date at start followed by text: "01/02 Costco Annual..."
+  // Must have remaining text (not just a date)
+  const singleDatePattern = /^(\d{1,2}\/\d{1,2})\s+([A-Za-z].+)$/;
+  const match = line.match(singleDatePattern);
+  if (match) {
+    return {
+      date: match[1],
+      remaining: match[2].trim(),
+    };
+  }
+  return null;
+}
+
 function parseTransactionsFromText(text: string): Transaction[] {
   const transactions: Transaction[] = [];
   const lines = text.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
@@ -286,6 +301,36 @@ function parseTransactionsFromText(text: string): Transaction[] {
           };
         }
         continue;
+      }
+      
+      // Try single-date format (for pending/future transactions like membership renewals)
+      // Only if we don't already have a pending transaction
+      if (!pendingTransaction) {
+        const singleDate = extractSingleDate(line);
+        if (singleDate) {
+          // Check if line has amount
+          const amountResult = extractAmount(singleDate.remaining);
+          if (amountResult) {
+            const details = amountResult.remaining.replace(/\s+/g, " ").trim();
+            if (amountResult.amount > 0 && details.length > 0) {
+              console.log(`[PDF Parser] Found Citibank single-date transaction: ${singleDate.date} - ${details} - $${amountResult.amount}`);
+              transactions.push({
+                id: randomUUID(),
+                date: singleDate.date,
+                details,
+                amount: amountResult.amount,
+              });
+            }
+          } else {
+            // Start collecting multi-line single-date transaction
+            pendingTransaction = {
+              date: singleDate.date,
+              details: [singleDate.remaining],
+            };
+            console.log(`[PDF Parser] Starting single-date transaction: ${singleDate.date} - ${singleDate.remaining}`);
+          }
+          continue;
+        }
       }
       
       // Check if this line has an amount for a pending transaction
