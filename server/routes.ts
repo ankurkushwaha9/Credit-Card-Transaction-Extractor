@@ -25,88 +25,219 @@ const upload = multer({
   },
 });
 
+// Helper to normalize amount strings to numbers
+function normalizeAmount(amountStr: string): number | null {
+  let cleaned = amountStr.trim();
+  let isNegative = false;
+  
+  // Handle parentheses for negatives: (123.45) -> -123.45
+  if (/^\(.*\)$/.test(cleaned)) {
+    isNegative = true;
+    cleaned = cleaned.slice(1, -1);
+  }
+  
+  // Handle trailing minus: 123.45- -> -123.45
+  if (cleaned.endsWith("-")) {
+    isNegative = true;
+    cleaned = cleaned.slice(0, -1);
+  }
+  
+  // Handle leading minus
+  if (cleaned.startsWith("-")) {
+    isNegative = true;
+    cleaned = cleaned.slice(1);
+  }
+  
+  // Handle CR (credit) / DR (debit) suffixes
+  if (/CR$/i.test(cleaned)) {
+    cleaned = cleaned.replace(/CR$/i, "");
+  } else if (/DR$/i.test(cleaned)) {
+    isNegative = true;
+    cleaned = cleaned.replace(/DR$/i, "");
+  }
+  
+  // Remove currency symbols, commas, spaces
+  cleaned = cleaned.replace(/[$,\s]/g, "");
+  
+  const parsed = parseFloat(cleaned);
+  if (isNaN(parsed)) return null;
+  
+  return isNegative ? -parsed : parsed;
+}
+
+// Extract date from a line if present
+function extractDate(line: string): { date: string; remaining: string } | null {
+  const datePatterns = [
+    /^(\d{1,2}\/\d{1,2}\/\d{2,4})\s*/,           // MM/DD/YYYY or MM/DD/YY at start
+    /^(\d{1,2}-\d{1,2}-\d{2,4})\s*/,             // MM-DD-YYYY at start
+    /^(\d{4}-\d{2}-\d{2})\s*/,                   // YYYY-MM-DD at start
+    /^(\w{3}\s+\d{1,2},?\s+\d{2,4})\s*/,         // Jan 01, 2024 at start
+    /^(\d{1,2}\s+\w{3}\s+\d{2,4})\s*/,           // 01 Jan 2024 at start
+    /(\d{1,2}\/\d{1,2}\/\d{2,4})/,               // MM/DD/YYYY anywhere
+    /(\d{1,2}-\d{1,2}-\d{2,4})/,                 // MM-DD-YYYY anywhere
+    /(\d{4}-\d{2}-\d{2})/,                       // YYYY-MM-DD anywhere
+  ];
+  
+  for (const pattern of datePatterns) {
+    const match = line.match(pattern);
+    if (match) {
+      return {
+        date: match[1].trim(),
+        remaining: line.replace(match[0], "").trim(),
+      };
+    }
+  }
+  return null;
+}
+
+// Extract amount from a line if present
+function extractAmount(line: string): { amount: number; remaining: string } | null {
+  // Multiple patterns to match different amount formats
+  const amountPatterns = [
+    // Parentheses negative: ($1,234.56) or (1,234.56)
+    /\(\$?\d{1,3}(?:,\d{3})*\.\d{2}\)/g,
+    // Currency with optional negative: $1,234.56, -$1,234.56, $-1,234.56
+    /[-]?\$\s*-?\d{1,3}(?:,\d{3})*\.\d{2}/g,
+    // Plain with cents and optional CR/DR: 1,234.56, 1,234.56CR, 1,234.56DR
+    /\d{1,3}(?:,\d{3})*\.\d{2}\s*(?:CR|DR)?/gi,
+    // Trailing minus: 1,234.56-
+    /\d{1,3}(?:,\d{3})*\.\d{2}-/g,
+    // Simple decimal: 123.45
+    /\d+\.\d{2}/g,
+  ];
+  
+  for (const pattern of amountPatterns) {
+    const matches = line.match(pattern);
+    if (matches && matches.length > 0) {
+      // Take the last amount found (usually the transaction total)
+      const amountStr = matches[matches.length - 1];
+      const amount = normalizeAmount(amountStr);
+      if (amount !== null && Math.abs(amount) >= 0.01) {
+        return {
+          amount,
+          remaining: line.replace(amountStr, "").trim(),
+        };
+      }
+    }
+  }
+  return null;
+}
+
 function parseTransactionsFromText(text: string): Transaction[] {
   const transactions: Transaction[] = [];
-  const lines = text.split("\n").filter((line) => line.trim());
-
-  // Common date patterns
-  const datePatterns = [
-    /(\d{1,2}\/\d{1,2}\/\d{2,4})/,  // MM/DD/YYYY or MM/DD/YY
-    /(\d{1,2}-\d{1,2}-\d{2,4})/,    // MM-DD-YYYY
-    /(\w{3}\s+\d{1,2},?\s+\d{4})/,  // Jan 01, 2024
-    /(\d{4}-\d{2}-\d{2})/,          // YYYY-MM-DD
-  ];
-
-  // Amount patterns
-  const amountPatterns = [
-    /\$?\s*-?\d{1,3}(?:,\d{3})*(?:\.\d{2})?/g,  // $1,234.56 or -$1,234.56
-    /-?\d{1,3}(?:,\d{3})*\.\d{2}\s*(?:CR|DR)?/gi, // 1,234.56 CR/DR
-  ];
-
-  for (const line of lines) {
-    let date: string | null = null;
-    let amount: number | null = null;
-    let details = line;
-
-    // Try to find a date
-    for (const pattern of datePatterns) {
-      const match = line.match(pattern);
-      if (match) {
-        date = match[1];
-        details = details.replace(match[0], "").trim();
-        break;
-      }
+  const lines = text.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+  
+  let currentTransaction: { date: string; details: string[]; amount?: number } | null = null;
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Skip common header/footer lines
+    if (/^(page|date|description|amount|balance|transaction|posting|reference|memo|statement|account)/i.test(line)) {
+      continue;
     }
-
-    // Try to find an amount
-    for (const pattern of amountPatterns) {
-      const matches = line.match(pattern);
-      if (matches && matches.length > 0) {
-        // Take the last amount found (usually the transaction amount)
-        const amountStr = matches[matches.length - 1];
-        const cleaned = amountStr.replace(/[$,\s]/g, "").replace(/CR$/i, "").replace(/DR$/i, "-");
-        const parsed = parseFloat(cleaned);
-        if (!isNaN(parsed)) {
-          amount = parsed;
-          details = details.replace(amountStr, "").trim();
+    
+    // Try to extract date from this line
+    const dateResult = extractDate(line);
+    
+    if (dateResult) {
+      // If we have a pending transaction, save it
+      if (currentTransaction && currentTransaction.amount !== undefined) {
+        const details = currentTransaction.details.join(" ").replace(/\s+/g, " ").trim();
+        if (details.length > 0) {
+          transactions.push({
+            id: randomUUID(),
+            date: currentTransaction.date,
+            details,
+            amount: currentTransaction.amount,
+          });
         }
-        break;
+      }
+      
+      // Start a new transaction
+      currentTransaction = {
+        date: dateResult.date,
+        details: [],
+      };
+      
+      // Check if amount is on the same line
+      const amountResult = extractAmount(dateResult.remaining);
+      if (amountResult) {
+        currentTransaction.amount = amountResult.amount;
+        if (amountResult.remaining.length > 0) {
+          currentTransaction.details.push(amountResult.remaining);
+        }
+      } else if (dateResult.remaining.length > 0) {
+        currentTransaction.details.push(dateResult.remaining);
+      }
+    } else if (currentTransaction) {
+      // No date on this line - it's either a continuation or contains amount
+      const amountResult = extractAmount(line);
+      
+      if (amountResult && currentTransaction.amount === undefined) {
+        currentTransaction.amount = amountResult.amount;
+        if (amountResult.remaining.length > 0) {
+          currentTransaction.details.push(amountResult.remaining);
+        }
+      } else if (!amountResult) {
+        // Line has no amount - treat as details continuation
+        currentTransaction.details.push(line);
+      }
+    } else {
+      // No current transaction - try to find amount with date on same line
+      const amountResult = extractAmount(line);
+      if (amountResult) {
+        const dateInLine = extractDate(line);
+        if (dateInLine) {
+          const details = amountResult.remaining.replace(dateInLine.date, "").trim();
+          if (details.length > 0) {
+            transactions.push({
+              id: randomUUID(),
+              date: dateInLine.date,
+              details: details.replace(/\s+/g, " ").trim(),
+              amount: amountResult.amount,
+            });
+          }
+        }
       }
     }
-
-    // Only add if we found both date and amount
-    if (date && amount !== null && details.length > 2) {
+  }
+  
+  // Don't forget the last transaction
+  if (currentTransaction && currentTransaction.amount !== undefined) {
+    const details = currentTransaction.details.join(" ").replace(/\s+/g, " ").trim();
+    if (details.length > 0) {
       transactions.push({
         id: randomUUID(),
-        date,
-        details: details.replace(/\s+/g, " ").trim(),
-        amount,
+        date: currentTransaction.date,
+        details,
+        amount: currentTransaction.amount,
       });
     }
   }
-
-  // If no transactions found using patterns, generate sample data for demo
-  if (transactions.length === 0) {
+  
+  // Remove duplicates based on date + details + amount
+  const seen = new Set<string>();
+  const uniqueTransactions = transactions.filter((t) => {
+    const key = `${t.date}|${t.details}|${t.amount}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  
+  // If truly no transactions found, return sample data for demo
+  if (uniqueTransactions.length === 0) {
     const sampleTransactions = [
       { date: "12/01/2024", details: "Amazon.com Purchase", amount: -125.99 },
       { date: "12/02/2024", details: "Starbucks Coffee", amount: -6.45 },
       { date: "12/03/2024", details: "Direct Deposit - Payroll", amount: 3250.00 },
       { date: "12/05/2024", details: "Netflix Subscription", amount: -15.99 },
       { date: "12/07/2024", details: "Gas Station - Shell", amount: -48.32 },
-      { date: "12/10/2024", details: "Grocery Store - Whole Foods", amount: -156.78 },
-      { date: "12/12/2024", details: "Electric Bill - ConEd", amount: -89.50 },
-      { date: "12/15/2024", details: "Restaurant - Chipotle", amount: -12.95 },
-      { date: "12/18/2024", details: "Online Transfer In", amount: 500.00 },
-      { date: "12/20/2024", details: "Phone Bill - Verizon", amount: -85.00 },
     ];
-
-    return sampleTransactions.map((t) => ({
-      ...t,
-      id: randomUUID(),
-    }));
+    return sampleTransactions.map((t) => ({ ...t, id: randomUUID() }));
   }
-
-  return transactions;
+  
+  return uniqueTransactions;
 }
 
 async function generateExcel(transactions: Transaction[]): Promise<Buffer> {
