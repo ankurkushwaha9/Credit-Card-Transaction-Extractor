@@ -2,11 +2,15 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import multer from "multer";
-import { createRequire } from "module";
-const require = createRequire(import.meta.url);
-const pdfParseModule = require("pdf-parse");
-const pdfParse = pdfParseModule.default ?? pdfParseModule;
 import ExcelJS from "exceljs";
+
+// Dynamic import for pdf-parse (CommonJS module)
+async function parsePDF(buffer: Buffer): Promise<{ text: string; numpages: number }> {
+  const { createRequire } = await import("module");
+  const require = createRequire(import.meta.url);
+  const pdfParse = require("pdf-parse");
+  return pdfParse(buffer);
+}
 import { Document, Packer, Paragraph, Table, TableRow, TableCell, WidthType, TextRun, HeadingLevel, AlignmentType, BorderStyle } from "docx";
 import type { Transaction } from "@shared/schema";
 import { randomUUID } from "crypto";
@@ -470,10 +474,10 @@ export async function registerRoutes(
       // Parse PDF
       let transactions: Transaction[] = [];
       try {
-        const pdfData = await pdfParse(req.file.buffer);
+        const pdfData = await parsePDF(req.file.buffer);
         console.log(`[PDF Parser] Pages: ${pdfData.numpages}, Text length: ${pdfData.text.length} chars`);
-        // Log first 500 chars to see PDF structure
-        console.log(`[PDF Parser] Sample text: ${pdfData.text.substring(0, 500).replace(/\n/g, "\\n")}`);
+        // Log first 1000 chars to see PDF structure
+        console.log(`[PDF Parser] Sample text: ${pdfData.text.substring(0, 1000).replace(/\n/g, "\\n")}`);
         transactions = parseTransactionsFromText(pdfData.text);
       } catch (pdfError) {
         console.error("PDF parsing error:", pdfError);
