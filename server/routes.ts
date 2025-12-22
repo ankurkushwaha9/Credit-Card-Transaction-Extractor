@@ -225,6 +225,10 @@ function parseTransactionsFromText(text: string): Transaction[] {
     // Check for transaction section headers
     if (isTransactionSectionHeader(line)) {
       console.log(`[PDF Parser] Found section header: "${line}"`);
+      // Log next 5 lines to see what follows
+      for (let j = 1; j <= 5 && i + j < lines.length; j++) {
+        console.log(`[PDF Parser] Line after header +${j}: "${lines[i + j]}"`);
+      }
       inTransactionSection = true;
       
       // Save any pending transaction before switching sections
