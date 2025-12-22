@@ -221,8 +221,28 @@ function parseTransactionsFromText(text: string): Transaction[] {
   if (isCitibank) {
     // For Citibank: scan ALL lines for dual-date transaction pattern
     // Format: MM/DD MM/DD DESCRIPTION LOCATION $AMOUNT
+    // Some transactions span multiple lines (amount on next line)
+    
+    let pendingTransaction: { date: string; details: string[] } | null = null;
+    let inStandardPurchases = false;
+    let inCreditsSection = false;
+    
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
+      
+      // Track which section we're in
+      if (/^standard\s+purchases?$/i.test(line)) {
+        inStandardPurchases = true;
+        inCreditsSection = false;
+        console.log(`[PDF Parser] Entering Standard Purchases section`);
+        continue;
+      }
+      if (/^credits?$/i.test(line) || /^payments?\s+(and\s+)?credits?$/i.test(line)) {
+        inCreditsSection = true;
+        inStandardPurchases = false;
+        console.log(`[PDF Parser] Entering Credits section - will skip`);
+        continue;
+      }
       
       // Skip summary and header lines
       if (isSummaryLabel(line) || isTransactionSectionHeader(line)) {
@@ -232,9 +252,23 @@ function parseTransactionsFromText(text: string): Transaction[] {
       // Try Citibank dual-date format (MM/DD MM/DD DESCRIPTION AMOUNT)
       const dualDates = extractDualDates(line);
       if (dualDates) {
+        // Save any pending transaction first
+        if (pendingTransaction) {
+          // Look for amount in current line before the dual dates
+          const details = pendingTransaction.details.join(" ").replace(/\s+/g, " ").trim();
+          console.log(`[PDF Parser] Discarding incomplete transaction: ${pendingTransaction.date} - ${details}`);
+          pendingTransaction = null;
+        }
+        
         const amountResult = extractAmount(dualDates.remaining);
         if (amountResult) {
+          // Complete transaction on one line
           const details = amountResult.remaining.replace(/\s+/g, " ").trim();
+          // Skip credits (negative amounts) unless we're explicitly in purchases section
+          if (amountResult.amount < 0 && !inStandardPurchases) {
+            console.log(`[PDF Parser] Skipping credit transaction: ${dualDates.transDate} - ${details} - $${amountResult.amount}`);
+            continue;
+          }
           if (details.length > 0) {
             console.log(`[PDF Parser] Found Citibank transaction: ${dualDates.transDate} - ${details} - $${amountResult.amount}`);
             transactions.push({
@@ -244,6 +278,42 @@ function parseTransactionsFromText(text: string): Transaction[] {
               amount: amountResult.amount,
             });
           }
+        } else {
+          // No amount on this line - start collecting multi-line transaction
+          pendingTransaction = {
+            date: dualDates.transDate,
+            details: [dualDates.remaining],
+          };
+        }
+        continue;
+      }
+      
+      // Check if this line has an amount for a pending transaction
+      if (pendingTransaction) {
+        const amountResult = extractAmount(line);
+        if (amountResult) {
+          // Add any remaining text to details
+          if (amountResult.remaining.trim().length > 0) {
+            pendingTransaction.details.push(amountResult.remaining.trim());
+          }
+          const details = pendingTransaction.details.join(" ").replace(/\s+/g, " ").trim();
+          
+          // Skip credits (negative amounts) unless we're explicitly in purchases section  
+          if (amountResult.amount < 0 && !inStandardPurchases) {
+            console.log(`[PDF Parser] Skipping credit transaction: ${pendingTransaction.date} - ${details} - $${amountResult.amount}`);
+          } else if (details.length > 0) {
+            console.log(`[PDF Parser] Found Citibank multi-line transaction: ${pendingTransaction.date} - ${details} - $${amountResult.amount}`);
+            transactions.push({
+              id: randomUUID(),
+              date: pendingTransaction.date,
+              details,
+              amount: amountResult.amount,
+            });
+          }
+          pendingTransaction = null;
+        } else {
+          // No amount - this is a continuation of the description
+          pendingTransaction.details.push(line);
         }
       }
     }
