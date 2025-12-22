@@ -3,15 +3,8 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import multer from "multer";
 import ExcelJS from "exceljs";
-
-// Dynamic import for pdf-parse (CommonJS module)
-async function parsePDF(buffer: Buffer): Promise<{ text: string; numpages: number }> {
-  const { createRequire } = await import("module");
-  const require = createRequire(import.meta.url);
-  const pdfParse = require("pdf-parse");
-  return pdfParse(buffer);
-}
 import { Document, Packer, Paragraph, Table, TableRow, TableCell, WidthType, TextRun, HeadingLevel, AlignmentType, BorderStyle } from "docx";
+import { PDFParse } from "pdf-parse";
 import type { Transaction } from "@shared/schema";
 import { randomUUID } from "crypto";
 
@@ -242,19 +235,7 @@ function parseTransactionsFromText(text: string): Transaction[] {
   // Log transaction count for debugging
   console.log(`[PDF Parser] Extracted ${transactions.length} transactions from PDF text`);
   
-  // If truly no transactions found, return sample data for demo
-  if (transactions.length === 0) {
-    console.log("[PDF Parser] No transactions found, using sample data");
-    const sampleTransactions = [
-      { date: "12/01/2024", details: "Amazon.com Purchase", amount: -125.99 },
-      { date: "12/02/2024", details: "Starbucks Coffee", amount: -6.45 },
-      { date: "12/03/2024", details: "Direct Deposit - Payroll", amount: 3250.00 },
-      { date: "12/05/2024", details: "Netflix Subscription", amount: -15.99 },
-      { date: "12/07/2024", details: "Gas Station - Shell", amount: -48.32 },
-    ];
-    return sampleTransactions.map((t) => ({ ...t, id: randomUUID() }));
-  }
-  
+  // Return whatever transactions we found (even if empty)
   return transactions;
 }
 
@@ -471,18 +452,23 @@ export async function registerRoutes(
       // Update status to processing
       await storage.updateStatement(statement.id, { status: "processing" });
 
-      // Parse PDF
+      // Parse PDF using pdf-parse v2 API
       let transactions: Transaction[] = [];
       try {
-        const pdfData = await parsePDF(req.file.buffer);
+        const parser = new PDFParse({ data: req.file.buffer });
+        const pdfData = await parser.getText();
         console.log(`[PDF Parser] Pages: ${pdfData.numpages}, Text length: ${pdfData.text.length} chars`);
-        // Log first 1000 chars to see PDF structure
-        console.log(`[PDF Parser] Sample text: ${pdfData.text.substring(0, 1000).replace(/\n/g, "\\n")}`);
+        // Log first 2000 chars to see PDF structure
+        console.log(`[PDF Parser] Sample text:\n${pdfData.text.substring(0, 2000)}`);
         transactions = parseTransactionsFromText(pdfData.text);
+        await parser.destroy();
       } catch (pdfError) {
         console.error("PDF parsing error:", pdfError);
-        // Fallback to sample transactions for demo
-        transactions = parseTransactionsFromText("");
+        await storage.updateStatement(statement.id, {
+          status: "error",
+          errorMessage: "Failed to parse PDF file",
+        });
+        return res.status(400).json({ message: "Failed to parse PDF. Please ensure it's a valid bank or credit card statement." });
       }
 
       // Update with results
