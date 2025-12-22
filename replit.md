@@ -1,75 +1,58 @@
 # StatementPro - Financial Statement Processor
 
 ## Overview
+StatementPro is a secure web application that allows users to upload bank or credit card statements (PDF format), extract transaction data, and download the results as Excel (.xlsx) or Word (.docx) files.
 
-StatementPro is an enterprise-grade financial application that allows users to securely upload bank or credit card statements (PDF format), extract standardized transaction data, and download the results as Excel or Word documents. The application is designed with bank-grade security principles, emphasizing trust, data isolation, and professional aesthetics.
+## Current State
+**Status:** MVP Complete
+- Upload functionality with drag-and-drop support
+- PDF parsing with transaction extraction
+- Transaction table display with sorting
+- Excel and Word export functionality
+- Dark/light theme toggle
+- Responsive design for mobile and desktop
 
-**Core Features:**
-- PDF statement upload with drag-and-drop interface
-- Transaction extraction (date, details, amount in USD)
-- Export to Excel (.xlsx) or Word (.docx) formats
-- Light/dark theme support
-- Mobile-responsive design
+## Project Architecture
+
+### Frontend (React + TypeScript)
+- **client/src/App.tsx** - Main app component with routing and providers
+- **client/src/pages/home.tsx** - Main page with upload, processing, and results states
+- **client/src/components/**
+  - `theme-provider.tsx` - Dark/light theme context
+  - `header.tsx` - App header with branding and theme toggle
+  - `file-dropzone.tsx` - Drag-and-drop file upload component
+  - `transaction-table.tsx` - Sortable transaction data table
+  - `format-selector.tsx` - Excel/Word format selection
+  - `processing-view.tsx` - Loading state during processing
+
+### Backend (Express + TypeScript)
+- **server/routes.ts** - API endpoints for upload, retrieval, and export
+- **server/storage.ts** - In-memory storage for statements
+
+### Shared
+- **shared/schema.ts** - TypeScript types and Zod schemas for transactions and statements
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/statements/upload` | POST | Upload PDF file (multipart/form-data) |
+| `/api/statements/:id` | GET | Get statement with transactions |
+| `/api/statements/:id/export` | GET | Export as xlsx or docx (query param: format) |
+
+## Technologies Used
+- **Frontend:** React, TanStack Query, Tailwind CSS, Shadcn/UI, Wouter
+- **Backend:** Express.js, Multer (file upload), pdf-parse (PDF parsing)
+- **Document Generation:** ExcelJS (xlsx), docx (Word documents)
+
+## Design System
+- **Primary Font:** Inter (UI text)
+- **Monospace Font:** JetBrains Mono (transaction data)
+- **Color Scheme:** Professional blue tones (210 hue)
+- **Theme:** Dark and light mode support
 
 ## User Preferences
+- None recorded yet
 
-Preferred communication style: Simple, everyday language.
-
-## System Architecture
-
-### Frontend Architecture
-- **Framework:** React 18 with TypeScript
-- **Routing:** Wouter (lightweight client-side routing)
-- **State Management:** TanStack React Query for server state
-- **Styling:** Tailwind CSS with shadcn/ui component library
-- **Build Tool:** Vite with HMR support
-- **Design System:** Material Design 3-inspired with Inter font family
-
-The frontend follows a component-based architecture with:
-- Pages in `client/src/pages/`
-- Reusable components in `client/src/components/`
-- UI primitives from shadcn/ui in `client/src/components/ui/`
-- Custom hooks in `client/src/hooks/`
-
-### Backend Architecture
-- **Runtime:** Node.js with Express
-- **Language:** TypeScript (ESM modules)
-- **API Pattern:** RESTful endpoints under `/api/`
-- **File Handling:** Multer for multipart form uploads (10MB limit, PDF only)
-- **PDF Processing:** pdf-parse library for text extraction
-- **Document Generation:** ExcelJS for .xlsx, docx library for .docx
-
-### Data Storage
-- **Current Implementation:** In-memory storage (MemStorage class)
-- **Schema Definition:** Zod schemas in `shared/schema.ts`
-- **Database Ready:** Drizzle ORM configured with PostgreSQL dialect
-- **Session Storage:** connect-pg-simple available for production sessions
-
-The storage layer uses an interface pattern (`IStorage`) allowing easy swap from memory to PostgreSQL when provisioned.
-
-### API Structure
-- `POST /api/statements/upload` - Upload PDF statement
-- `GET /api/statements/:id` - Retrieve statement with transactions
-- `GET /api/statements/:id/export/:format` - Download as xlsx/docx
-
-### Build System
-- Development: `tsx` for TypeScript execution with Vite dev server
-- Production: esbuild bundles server, Vite builds client
-- Output: `dist/` directory with `index.cjs` (server) and `public/` (client)
-
-## External Dependencies
-
-### Core Services
-- **PostgreSQL:** Database (via Drizzle ORM when DATABASE_URL is set)
-- **PDF Processing:** pdf-parse for extracting text from uploaded PDFs
-
-### Key Libraries
-- **Frontend:** React, TanStack Query, Radix UI primitives, Tailwind CSS
-- **Backend:** Express, Multer, ExcelJS, docx
-- **Validation:** Zod for runtime type checking and schema validation
-- **ORM:** Drizzle ORM with drizzle-kit for migrations
-
-### Development Tools
-- **TypeScript:** Strict mode enabled, path aliases configured
-- **Vite:** Development server with Replit-specific plugins
-- **Tailwind:** Custom theme with CSS variables for theming
+## Recent Changes
+- December 22, 2025: Initial MVP implementation with complete upload-to-export flow
