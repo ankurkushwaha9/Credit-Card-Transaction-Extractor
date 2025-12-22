@@ -1,18 +1,51 @@
-import { sql } from "drizzle-orm";
-import { pgTable, text, varchar } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+// Transaction extracted from statement
+export const transactionSchema = z.object({
+  id: z.string(),
+  date: z.string(),
+  details: z.string(),
+  amount: z.number(),
 });
 
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
+export type Transaction = z.infer<typeof transactionSchema>;
+
+// Statement upload and processing
+export const statementSchema = z.object({
+  id: z.string(),
+  filename: z.string(),
+  fileSize: z.number(),
+  status: z.enum(["uploading", "processing", "completed", "error"]),
+  transactions: z.array(transactionSchema),
+  errorMessage: z.string().optional(),
+  uploadedAt: z.string(),
 });
 
-export type InsertUser = z.infer<typeof insertUserSchema>;
-export type User = typeof users.$inferSelect;
+export type Statement = z.infer<typeof statementSchema>;
+
+// Insert schema for new statement upload
+export const insertStatementSchema = z.object({
+  filename: z.string(),
+  fileSize: z.number(),
+});
+
+export type InsertStatement = z.infer<typeof insertStatementSchema>;
+
+// Export format options
+export const exportFormatSchema = z.enum(["xlsx", "docx"]);
+export type ExportFormat = z.infer<typeof exportFormatSchema>;
+
+// API response types
+export const uploadResponseSchema = z.object({
+  statementId: z.string(),
+  message: z.string(),
+});
+
+export type UploadResponse = z.infer<typeof uploadResponseSchema>;
+
+export const exportResponseSchema = z.object({
+  downloadUrl: z.string(),
+  expiresAt: z.string(),
+});
+
+export type ExportResponse = z.infer<typeof exportResponseSchema>;

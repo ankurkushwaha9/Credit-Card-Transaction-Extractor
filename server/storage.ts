@@ -1,37 +1,49 @@
-import { type User, type InsertUser } from "@shared/schema";
+import type { Statement, InsertStatement, Transaction } from "@shared/schema";
 import { randomUUID } from "crypto";
 
-// modify the interface with any CRUD methods
-// you might need
-
 export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  createStatement(data: InsertStatement): Promise<Statement>;
+  getStatement(id: string): Promise<Statement | undefined>;
+  updateStatement(id: string, data: Partial<Statement>): Promise<Statement | undefined>;
+  deleteStatement(id: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
-  private users: Map<string, User>;
+  private statements: Map<string, Statement>;
 
   constructor() {
-    this.users = new Map();
+    this.statements = new Map();
   }
 
-  async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
-  }
-
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
-  }
-
-  async createUser(insertUser: InsertUser): Promise<User> {
+  async createStatement(data: InsertStatement): Promise<Statement> {
     const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
+    const statement: Statement = {
+      id,
+      filename: data.filename,
+      fileSize: data.fileSize,
+      status: "uploading",
+      transactions: [],
+      uploadedAt: new Date().toISOString(),
+    };
+    this.statements.set(id, statement);
+    return statement;
+  }
+
+  async getStatement(id: string): Promise<Statement | undefined> {
+    return this.statements.get(id);
+  }
+
+  async updateStatement(id: string, data: Partial<Statement>): Promise<Statement | undefined> {
+    const statement = this.statements.get(id);
+    if (!statement) return undefined;
+    
+    const updated = { ...statement, ...data };
+    this.statements.set(id, updated);
+    return updated;
+  }
+
+  async deleteStatement(id: string): Promise<boolean> {
+    return this.statements.delete(id);
   }
 }
 
