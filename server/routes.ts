@@ -139,21 +139,172 @@ function extractAmount(line: string): { amount: number; remaining: string } | nu
   return null;
 }
 
+// Detect if a line is a transaction section header
+function isTransactionSectionHeader(line: string): boolean {
+  const sectionPatterns = [
+    /^standard\s+purchases?$/i,
+    /^purchases?$/i,
+    /^cash\s+advances?$/i,
+    /^balance\s+transfers?$/i,
+    /^fees?\s+charged$/i,
+    /^interest\s+charged$/i,
+    /^payments?\s+and\s+credits?$/i,
+    /^payments?$/i,
+    /^credits?$/i,
+    /^transactions?$/i,
+    /^account\s+activity$/i,
+    /^transaction\s+detail$/i,
+    /^transaction\s+history$/i,
+  ];
+  
+  const normalized = line.trim();
+  return sectionPatterns.some(pattern => pattern.test(normalized));
+}
+
+// Detect if a line is a summary label (not a transaction)
+function isSummaryLabel(line: string): boolean {
+  const summaryPatterns = [
+    /^previous\s+balance/i,
+    /^new\s+balance/i,
+    /^payment\s+due/i,
+    /^minimum\s+payment/i,
+    /^credit\s+limit/i,
+    /^available\s+credit/i,
+    /^statement\s+closing/i,
+    /^account\s+summary/i,
+    /^account\s+number/i,
+    /^billing\s+period/i,
+    /^days\s+in\s+billing/i,
+    /^total\s+credit\s+line/i,
+    /^cash\s+credit\s+line/i,
+    /^available\s+for/i,
+    /^amount\s+due/i,
+    /^total\s+fees/i,
+    /^total\s+interest/i,
+    /^annual\s+percentage/i,
+    /^apr\s+for/i,
+    /^balance\s+subject/i,
+    /^interest\s+rate/i,
+    /^member\s+since/i,
+    /^reward/i,
+    /^points?\s+earned/i,
+    /^points?\s+redeemed/i,
+    /^points?\s+balance/i,
+  ];
+  
+  return summaryPatterns.some(pattern => pattern.test(line.trim()));
+}
+
+// Check if line starts with dual dates (Citibank format: MM/DD MM/DD)
+function extractDualDates(line: string): { postDate: string; transDate: string; remaining: string } | null {
+  // Pattern for dual dates at start: "11/09 11/09" or "11/09  11/13"
+  const dualDatePattern = /^(\d{1,2}\/\d{1,2})\s+(\d{1,2}\/\d{1,2})\s+(.+)$/;
+  const match = line.match(dualDatePattern);
+  if (match) {
+    return {
+      postDate: match[1],
+      transDate: match[2],
+      remaining: match[3].trim(),
+    };
+  }
+  return null;
+}
+
 function parseTransactionsFromText(text: string): Transaction[] {
   const transactions: Transaction[] = [];
   const lines = text.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
   
+  let inTransactionSection = false;
   let currentTransaction: { date: string; details: string[]; amount?: number } | null = null;
+  
+  console.log(`[PDF Parser] Processing ${lines.length} lines`);
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     
-    // Skip only very specific header lines (be conservative to not skip real transactions)
-    if (/^(page\s+\d|description\s+amount|posting\s+date|statement\s+period)/i.test(line)) {
+    // Check for transaction section headers
+    if (isTransactionSectionHeader(line)) {
+      console.log(`[PDF Parser] Found section header: "${line}"`);
+      inTransactionSection = true;
+      
+      // Save any pending transaction before switching sections
+      if (currentTransaction && currentTransaction.amount !== undefined) {
+        const details = currentTransaction.details.join(" ").replace(/\s+/g, " ").trim();
+        if (details.length > 0) {
+          transactions.push({
+            id: randomUUID(),
+            date: currentTransaction.date,
+            details,
+            amount: currentTransaction.amount,
+          });
+        }
+        currentTransaction = null;
+      }
       continue;
     }
     
-    // Try to extract date from this line
+    // Skip lines if not in a transaction section yet
+    if (!inTransactionSection) {
+      continue;
+    }
+    
+    // Skip summary labels even within transaction sections
+    if (isSummaryLabel(line)) {
+      continue;
+    }
+    
+    // Skip common header/footer lines
+    if (/^(page\s+\d|description\s+amount|posting\s+date|statement\s+period|date\s+description|trans\s+date)/i.test(line)) {
+      continue;
+    }
+    
+    // Check for end of transaction section (new non-transaction section)
+    if (/^(account\s+summary|important\s+information|contact\s+us|interest\s+charge|fee\s+summary|2\d{3}\s+totals)/i.test(line)) {
+      inTransactionSection = false;
+      continue;
+    }
+    
+    // Try Citibank dual-date format first (MM/DD MM/DD DESCRIPTION AMOUNT)
+    const dualDates = extractDualDates(line);
+    if (dualDates) {
+      // Save any pending transaction
+      if (currentTransaction && currentTransaction.amount !== undefined) {
+        const details = currentTransaction.details.join(" ").replace(/\s+/g, " ").trim();
+        if (details.length > 0) {
+          transactions.push({
+            id: randomUUID(),
+            date: currentTransaction.date,
+            details,
+            amount: currentTransaction.amount,
+          });
+        }
+      }
+      
+      // Extract amount from the remaining text
+      const amountResult = extractAmount(dualDates.remaining);
+      if (amountResult) {
+        // Complete transaction on one line
+        const details = amountResult.remaining.replace(/\s+/g, " ").trim();
+        if (details.length > 0) {
+          transactions.push({
+            id: randomUUID(),
+            date: dualDates.transDate, // Use transaction date (second date)
+            details,
+            amount: amountResult.amount,
+          });
+        }
+        currentTransaction = null;
+      } else {
+        // Amount may be on next line - start collecting
+        currentTransaction = {
+          date: dualDates.transDate,
+          details: [dualDates.remaining],
+        };
+      }
+      continue;
+    }
+    
+    // Try single date format
     const dateResult = extractDate(line);
     
     if (dateResult) {
@@ -196,25 +347,8 @@ function parseTransactionsFromText(text: string): Transaction[] {
           currentTransaction.details.push(amountResult.remaining);
         }
       } else if (!amountResult) {
-        // Line has no amount - treat as details continuation
+        // Line has no amount - treat as details continuation (multi-line description)
         currentTransaction.details.push(line);
-      }
-    } else {
-      // No current transaction - try to find amount with date on same line
-      const amountResult = extractAmount(line);
-      if (amountResult) {
-        const dateInLine = extractDate(line);
-        if (dateInLine) {
-          const details = amountResult.remaining.replace(dateInLine.date, "").trim();
-          if (details.length > 0) {
-            transactions.push({
-              id: randomUUID(),
-              date: dateInLine.date,
-              details: details.replace(/\s+/g, " ").trim(),
-              amount: amountResult.amount,
-            });
-          }
-        }
       }
     }
   }
