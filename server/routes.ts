@@ -225,13 +225,171 @@ function extractSingleDate(line: string): { date: string; remaining: string } | 
   return null;
 }
 
+// Check if line starts with AMEX date format (MM/DD/YY)
+function extractAmexDate(line: string): { date: string; remaining: string } | null {
+  // Pattern for AMEX date: "12/18/24 CITY OF SHELBY..."
+  const amexDatePattern = /^(\d{1,2}\/\d{1,2}\/\d{2,4})\s+(.+)$/;
+  const match = line.match(amexDatePattern);
+  if (match) {
+    return {
+      date: match[1],
+      remaining: match[2].trim(),
+    };
+  }
+  return null;
+}
+
+// Check if this is an AMEX "Detail" section header
+function isAmexDetailHeader(line: string): boolean {
+  return /^detail$/i.test(line.trim()) || /^detail\s+continued$/i.test(line.trim());
+}
+
+// Check if this is an AMEX section we should skip (payments, credits)
+function isAmexSkipSection(line: string): boolean {
+  return /^payments?\s*&?\s*credits?$/i.test(line.trim()) ||
+         /^fees?$/i.test(line.trim()) ||
+         /^interest\s+charges?$/i.test(line.trim()) ||
+         /^total\s+fees?/i.test(line.trim());
+}
+
+// Check if line is AMEX footer/summary to skip
+function isAmexFooter(line: string): boolean {
+  return /^total$/i.test(line.trim()) ||
+         /^year\s+to\s+date/i.test(line.trim()) ||
+         /^closing\s+balance/i.test(line.trim()) ||
+         /^continued\s+on/i.test(line.trim()) ||
+         /^account\s+ending/i.test(line.trim()) ||
+         /^card\s+ending/i.test(line.trim()) ||
+         /^closing\s+date/i.test(line.trim()) ||
+         /^foreign\s+spend/i.test(line.trim()) ||
+         /^amount$/i.test(line.trim()) ||
+         /^p\.\s*\d+\/\d+/i.test(line.trim());
+}
+
 function parseTransactionsFromText(text: string): Transaction[] {
   const transactions: Transaction[] = [];
   const lines = text.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
   
-  // Detect if this is a Citibank statement
+  // Detect card type
   const isCitibank = /citi|costco\s*(anywhere|visa)/i.test(text);
-  console.log(`[PDF Parser] Processing ${lines.length} lines, Citibank detected: ${isCitibank}`);
+  const isAmex = /american\s*express|amex|delta\s*skymiles|membership\s*rewards/i.test(text) && 
+                 /\bdetail\b/i.test(text);
+  
+  console.log(`[PDF Parser] Processing ${lines.length} lines, Citibank: ${isCitibank}, AMEX: ${isAmex}`);
+  
+  // AMEX Parsing
+  if (isAmex) {
+    let inDetailSection = false;
+    let inSkipSection = false;
+    let pendingTransaction: { date: string; details: string[] } | null = null;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // Check for Detail section start
+      if (isAmexDetailHeader(line)) {
+        inDetailSection = true;
+        inSkipSection = false;
+        console.log(`[PDF Parser] AMEX: Entering Detail section`);
+        continue;
+      }
+      
+      // Check for sections to skip (Payments & Credits, Fees, etc.)
+      if (isAmexSkipSection(line)) {
+        inSkipSection = true;
+        console.log(`[PDF Parser] AMEX: Entering skip section - ${line}`);
+        // Save any pending transaction before entering skip section
+        if (pendingTransaction && pendingTransaction.details.length > 0) {
+          const fullText = pendingTransaction.details.join(" ");
+          const amountResult = extractAmount(fullText);
+          if (amountResult && amountResult.amount > 0) {
+            const details = amountResult.remaining.replace(/\s+/g, " ").trim();
+            if (details.length > 2) {
+              console.log(`[PDF Parser] AMEX transaction: ${pendingTransaction.date} - ${details} - $${amountResult.amount}`);
+              transactions.push({
+                id: randomUUID(),
+                date: pendingTransaction.date,
+                details,
+                amount: amountResult.amount,
+              });
+            }
+          }
+          pendingTransaction = null;
+        }
+        continue;
+      }
+      
+      // Skip if not in detail section or in skip section
+      if (!inDetailSection || inSkipSection) {
+        continue;
+      }
+      
+      // Skip footer/summary lines
+      if (isAmexFooter(line) || isSummaryLabel(line)) {
+        continue;
+      }
+      
+      // Check for AMEX date line (starts new transaction)
+      const amexDate = extractAmexDate(line);
+      if (amexDate) {
+        // Save previous pending transaction
+        if (pendingTransaction && pendingTransaction.details.length > 0) {
+          const fullText = pendingTransaction.details.join(" ");
+          const amountResult = extractAmount(fullText);
+          if (amountResult && amountResult.amount > 0) {
+            const details = amountResult.remaining.replace(/\s+/g, " ").trim();
+            if (details.length > 2) {
+              console.log(`[PDF Parser] AMEX transaction: ${pendingTransaction.date} - ${details} - $${amountResult.amount}`);
+              transactions.push({
+                id: randomUUID(),
+                date: pendingTransaction.date,
+                details,
+                amount: amountResult.amount,
+              });
+            }
+          }
+        }
+        
+        // Start new transaction
+        pendingTransaction = {
+          date: amexDate.date,
+          details: [amexDate.remaining],
+        };
+        continue;
+      }
+      
+      // Accumulate lines for pending transaction
+      if (pendingTransaction) {
+        // Skip lines that are just card info or account numbers
+        if (/^card\s+ending/i.test(line) || /^account\s+ending/i.test(line) ||
+            /^ankur\s+kushwaha/i.test(line) || /^\d{4}-\d{4}$/i.test(line)) {
+          continue;
+        }
+        pendingTransaction.details.push(line);
+      }
+    }
+    
+    // Save final pending transaction
+    if (pendingTransaction && pendingTransaction.details.length > 0) {
+      const fullText = pendingTransaction.details.join(" ");
+      const amountResult = extractAmount(fullText);
+      if (amountResult && amountResult.amount > 0) {
+        const details = amountResult.remaining.replace(/\s+/g, " ").trim();
+        if (details.length > 2) {
+          console.log(`[PDF Parser] AMEX transaction: ${pendingTransaction.date} - ${details} - $${amountResult.amount}`);
+          transactions.push({
+            id: randomUUID(),
+            date: pendingTransaction.date,
+            details,
+            amount: amountResult.amount,
+          });
+        }
+      }
+    }
+    
+    console.log(`[PDF Parser] Extracted ${transactions.length} AMEX transactions`);
+    return transactions;
+  }
   
   if (isCitibank) {
     // For Citibank: scan ALL lines for dual-date transaction pattern
