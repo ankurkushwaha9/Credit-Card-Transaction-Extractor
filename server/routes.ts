@@ -266,6 +266,14 @@ function isAmexFooter(line: string): boolean {
          /^p\.\s*\d+\/\d+/i.test(line.trim());
 }
 
+// Check if line is a cardholder name (to skip personal info)
+function isCardholderName(line: string): boolean {
+  // Generic pattern to match cardholder names (First Last or First Middle Last format)
+  // This helps skip personal information lines in statements
+  const namePattern = /^[A-Z][a-z]+\s+[A-Z][a-z]+(\s+[A-Z][a-z]+)?$/;
+  return namePattern.test(line.trim());
+}
+
 function parseTransactionsFromText(text: string): Transaction[] {
   const transactions: Transaction[] = [];
   const lines = text.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
@@ -360,9 +368,9 @@ function parseTransactionsFromText(text: string): Transaction[] {
       
       // Accumulate lines for pending transaction
       if (pendingTransaction) {
-        // Skip lines that are just card info or account numbers
+        // Skip lines that are just card info, account numbers, or cardholder names
         if (/^card\s+ending/i.test(line) || /^account\s+ending/i.test(line) ||
-            /^ankur\s+kushwaha/i.test(line) || /^\d{4}-\d{4}$/i.test(line)) {
+            isCardholderName(line) || /^\d{4}-\d{4}$/i.test(line)) {
           continue;
         }
         pendingTransaction.details.push(line);
