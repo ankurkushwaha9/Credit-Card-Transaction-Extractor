@@ -68,21 +68,40 @@ function normalizeAmount(amountStr: string): number | null {
 // Extract date from a line if present
 function extractDate(line: string): { date: string; remaining: string } | null {
   const datePatterns = [
+    // With year - at start of line
     /^(\d{1,2}\/\d{1,2}\/\d{2,4})\s*/,           // MM/DD/YYYY or MM/DD/YY at start
     /^(\d{1,2}-\d{1,2}-\d{2,4})\s*/,             // MM-DD-YYYY at start
     /^(\d{4}-\d{2}-\d{2})\s*/,                   // YYYY-MM-DD at start
     /^(\w{3}\s+\d{1,2},?\s+\d{2,4})\s*/,         // Jan 01, 2024 at start
     /^(\d{1,2}\s+\w{3}\s+\d{2,4})\s*/,           // 01 Jan 2024 at start
+    // Without year - short formats (common in credit card statements)
+    /^(\w{3}\s+\d{1,2})\s+/,                     // Jan 07 at start (no year)
+    /^(\d{1,2}\s+\w{3})\s+/,                     // 07 Jan at start (no year)
+    /^(\d{1,2}\/\d{1,2})\s+/,                    // MM/DD at start (no year)
+    /^(\d{1,2}-\d{1,2})\s+/,                     // MM-DD at start (no year)
+    // With year - anywhere in line
     /(\d{1,2}\/\d{1,2}\/\d{2,4})/,               // MM/DD/YYYY anywhere
     /(\d{1,2}-\d{1,2}-\d{2,4})/,                 // MM-DD-YYYY anywhere
     /(\d{4}-\d{2}-\d{2})/,                       // YYYY-MM-DD anywhere
+    // Without year - anywhere (less strict)
+    /\b(\w{3}\s+\d{1,2})\b/,                     // Jan 07 anywhere
+    /\b(\d{1,2}\s+\w{3})\b/,                     // 07 Jan anywhere
   ];
+  
+  // Month names for validation
+  const months = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
   
   for (const pattern of datePatterns) {
     const match = line.match(pattern);
     if (match) {
+      const dateStr = match[1].trim();
+      // Validate month names in text-based dates
+      if (/[a-zA-Z]/.test(dateStr)) {
+        const hasValidMonth = months.test(dateStr) || /\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(dateStr);
+        if (!hasValidMonth) continue;
+      }
       return {
-        date: match[1].trim(),
+        date: dateStr,
         remaining: line.replace(match[0], "").trim(),
       };
     }
@@ -132,8 +151,8 @@ function parseTransactionsFromText(text: string): Transaction[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     
-    // Skip common header/footer lines
-    if (/^(page|date|description|amount|balance|transaction|posting|reference|memo|statement|account)/i.test(line)) {
+    // Skip only very specific header lines (be conservative to not skip real transactions)
+    if (/^(page\s+\d|description\s+amount|posting\s+date|statement\s+period)/i.test(line)) {
       continue;
     }
     
@@ -216,17 +235,12 @@ function parseTransactionsFromText(text: string): Transaction[] {
     }
   }
   
-  // Remove duplicates based on date + details + amount
-  const seen = new Set<string>();
-  const uniqueTransactions = transactions.filter((t) => {
-    const key = `${t.date}|${t.details}|${t.amount}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  // Log transaction count for debugging
+  console.log(`[PDF Parser] Extracted ${transactions.length} transactions from PDF text`);
   
   // If truly no transactions found, return sample data for demo
-  if (uniqueTransactions.length === 0) {
+  if (transactions.length === 0) {
+    console.log("[PDF Parser] No transactions found, using sample data");
     const sampleTransactions = [
       { date: "12/01/2024", details: "Amazon.com Purchase", amount: -125.99 },
       { date: "12/02/2024", details: "Starbucks Coffee", amount: -6.45 },
@@ -237,7 +251,7 @@ function parseTransactionsFromText(text: string): Transaction[] {
     return sampleTransactions.map((t) => ({ ...t, id: randomUUID() }));
   }
   
-  return uniqueTransactions;
+  return transactions;
 }
 
 async function generateExcel(transactions: Transaction[]): Promise<Buffer> {
@@ -457,6 +471,9 @@ export async function registerRoutes(
       let transactions: Transaction[] = [];
       try {
         const pdfData = await pdfParse(req.file.buffer);
+        console.log(`[PDF Parser] Pages: ${pdfData.numpages}, Text length: ${pdfData.text.length} chars`);
+        // Log first 500 chars to see PDF structure
+        console.log(`[PDF Parser] Sample text: ${pdfData.text.substring(0, 500).replace(/\n/g, "\\n")}`);
         transactions = parseTransactionsFromText(pdfData.text);
       } catch (pdfError) {
         console.error("PDF parsing error:", pdfError);
