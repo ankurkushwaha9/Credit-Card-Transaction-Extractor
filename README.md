@@ -1,6 +1,6 @@
 # 💳 Credit Card Transaction Extractor
 
-A modern web application that extracts transactions from credit card PDF statements and exports them to Excel or Word documents for easy editing and sharing.
+A Python/Node.js PDF parser that extracts credit card transactions from statements (Citibank, AMEX) and exports to Excel/Word using pdf-parse, ExcelJS, and docx. All processing done locally — no data leaves your machine.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Node](https://img.shields.io/badge/node-%3E%3D18.0.0-green.svg)
@@ -115,27 +115,14 @@ Credit-Card-Transaction-Extractor/
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License
 
 ## 👨‍💻 Author
 
 **Ankur Kushwaha**
 - GitHub: [@ankurkushwaha9](https://github.com/ankurkushwaha9)
-
-## 🙏 Acknowledgments
-
-- [pdf-parse](https://www.npmjs.com/package/pdf-parse) for PDF text extraction
-- [ExcelJS](https://github.com/exceljs/exceljs) for Excel file generation
-- [docx](https://github.com/dolanmiu/docx) for Word document generation
-- [Radix UI](https://www.radix-ui.com/) for accessible UI components
 
 ---
 
